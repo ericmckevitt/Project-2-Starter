@@ -2,6 +2,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 #include "dispatcher.h"
 #include "shell_builtins.h"
@@ -51,7 +54,34 @@ static int dispatch_external_command(struct command *pipeline)
 	 * Good luck!
 	 */
 
-	printf("Testing\n");
+	pid_t pid;
+	int status;
+
+	pid = fork();
+
+	if (pid == -1) {
+		// Handle fork error
+		perror("fork");
+		return -1;
+	}
+
+	if (pid == 0) {
+		// Child process
+		execvp(pipeline->argv[0], pipeline->argv);
+
+		perror("execvp");
+		exit(-1);
+	} else {
+		// Parent process
+		waitpid(pid, &status, 0);
+
+		// Check if child terminated normally
+		if (WIFEXITED(status)) {
+			return WEXITSTATUS(status);
+		} else {
+			return -1;
+		}
+	}
 
 	fprintf(stderr, "TODO: handle external commands\n");
 	return -1;
