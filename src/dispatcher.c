@@ -50,6 +50,9 @@ static int dispatch_external_command(struct command *pipeline)
 	 *
 	 * Good luck!
 	 */
+
+	printf("Testing\n");
+
 	fprintf(stderr, "TODO: handle external commands\n");
 	return -1;
 }
