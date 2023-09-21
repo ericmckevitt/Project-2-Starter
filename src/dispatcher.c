@@ -5,6 +5,7 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <errno.h>
 
 #include "dispatcher.h"
 #include "shell_builtins.h"
@@ -69,7 +70,13 @@ static int dispatch_external_command(struct command *pipeline)
 		// Child process
 		execvp(pipeline->argv[0], pipeline->argv);
 
-		perror("execvp");
+		// Check why execvp failed
+		if (errno == ENOENT) {
+			fprintf(stderr, "error: cannot find command\n");
+		} else {
+			perror("Failed to execute the external command");
+		}
+
 		exit(-1);
 	} else {
 		// Parent process
