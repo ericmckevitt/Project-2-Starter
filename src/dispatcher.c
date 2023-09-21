@@ -61,7 +61,7 @@ static int dispatch_external_command(struct command *pipeline)
 
 	if (pid == -1) {
 		// Handle fork error
-		perror("fork");
+		perror("Failed to fork child process");
 		return -1;
 	}
 
