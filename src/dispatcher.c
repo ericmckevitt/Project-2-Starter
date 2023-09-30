@@ -72,6 +72,28 @@ static int dispatch_external_command(struct command *pipeline)
 		}
 	}
 
+	// output redirection
+	switch (pipeline->output_type) {
+		case COMMAND_OUTPUT_FILE_TRUNCATE:
+			output_fd = open(pipeline->output_filename, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+			if (output_fd == -1) {
+				perror("Failed to open output file for truncation");
+				close(input_fd);
+				return -1;
+			}
+			break;
+		case COMMAND_OUTPUT_FILE_APPEND:
+			output_fd = open(pipeline->output_filename, O_WRONLY | O_CREAT | O_APPEND, 0644);
+			if (output_fd == -1) {
+				perror("Failed to open output file for appending");
+				close(input_fd);
+				return -1;
+			}
+			break;
+		default:
+			break;
+	}
+
 	pid = fork();
 
 	if (pid == -1) {
