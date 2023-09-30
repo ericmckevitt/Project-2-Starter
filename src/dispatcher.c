@@ -6,6 +6,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 #include <errno.h>
+#include <fcntl.h>
 
 #include "dispatcher.h"
 #include "shell_builtins.h"
@@ -57,6 +58,19 @@ static int dispatch_external_command(struct command *pipeline)
 
 	pid_t pid;
 	int status;
+
+	// File descriptors for input/output redir. 
+	int input_fd = STDIN_FILENO;
+	int output_fd = STDOUT_FILENO;
+
+	// input redirection
+	if (pipeline->input_filename) {
+		input_fd = open(pipeline->input_filename, O_RDONLY);
+		if (input_fd == -1) {
+			perror("Failed to open input file");
+			return -1;
+		}
+	}
 
 	pid = fork();
 
