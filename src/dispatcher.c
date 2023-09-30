@@ -96,13 +96,18 @@ static int dispatch_external_command(struct command *pipeline)
 
 	pid = fork();
 
-	if (pid == -1) {
-		// Handle fork error
-		perror("Failed to fork child process");
-		return -1;
-	}
-
 	if (pid == 0) {
+
+		// redirect stdin and/or output if necessary
+		if (input_fd != STDIN_FILENO) {
+			dup2(input_fd, STDIN_FILENO);
+			close(input_fd);
+		}
+		if (output_fd != STDOUT_FILENO) {
+			dup2(output_fd, STDOUT_FILENO);
+			close(output_fd);
+		}
+
 		// Child process
 		execvp(pipeline->argv[0], pipeline->argv);
 
@@ -114,8 +119,13 @@ static int dispatch_external_command(struct command *pipeline)
 		}
 
 		exit(-1);
-	} else {
+	} else if (pid > 0) {
 		// Parent process
+
+		// Clock file descriptors in parent
+		if (input_fd != STDIN_FILENO) close(input_fd);
+		if (output_fd != STDOUT_FILENO) close(output_fd);
+
 		waitpid(pid, &status, 0);
 
 		// Check if child terminated normally
@@ -124,6 +134,9 @@ static int dispatch_external_command(struct command *pipeline)
 		} else {
 			return -1;
 		}
+	} else {
+		perror("fork failed");
+		return -1;
 	}
 
 	return -1;
