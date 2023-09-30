@@ -90,7 +90,6 @@ static int dispatch_external_command(struct command *pipeline)
 		}
 	}
 
-	fprintf(stderr, "TODO: handle external commands\n");
 	return -1;
 }
 
