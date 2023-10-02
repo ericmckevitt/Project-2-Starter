@@ -63,83 +63,96 @@ static int dispatch_external_command(struct command *pipeline)
 	int input_fd = STDIN_FILENO;
 	int output_fd = STDOUT_FILENO;
 
-	// input redirection
-	if (pipeline->input_filename) {
-		input_fd = open(pipeline->input_filename, O_RDONLY);
-		if (input_fd == -1) {
-			perror("Failed to open input file");
-			return -1;
-		}
-	}
+	int prev_pipe[2] = {-1, -1};
+	int curr_pipe[2];
 
-	// output redirection
-	switch (pipeline->output_type) {
-		case COMMAND_OUTPUT_FILE_TRUNCATE:
-			output_fd = open(pipeline->output_filename, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-			if (output_fd == -1) {
-				perror("Failed to open output file for truncation");
-				close(input_fd);
+	struct command *current_cmd = pipeline;
+
+	while (current_cmd) {
+		// Create a pipe if output of current_cmd is piped to another command
+		if (current_cmd->output_type == COMMAND_OUTPUT_PIPE) {
+			if (pipe(curr_pipe) == -1) {
+				perror("pipe failed");
 				return -1;
 			}
-			break;
-		case COMMAND_OUTPUT_FILE_APPEND:
+			output_fd = curr_pipe[1];
+		} else if (current_cmd->output_type == COMMAND_OUTPUT_FILE_TRUNCATE) {
+			output_fd = open(current_cmd->output_filename, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+		} else if (current_cmd->output_type == COMMAND_OUTPUT_FILE_APPEND) {
 			output_fd = open(pipeline->output_filename, O_WRONLY | O_CREAT | O_APPEND, 0644);
-			if (output_fd == -1) {
-				perror("Failed to open output file for appending");
+		}
+
+		// Handle errors with file opening
+		if ((current_cmd->output_type == COMMAND_OUTPUT_FILE_TRUNCATE || current_cmd->output_type == COMMAND_OUTPUT_FILE_APPEND) && output_fd == -1) {
+			perror("Failed to open output file");
+			return -1; 
+		}
+
+		pid = fork();
+
+		if (pid == 0) {
+			// Child process
+
+			// redirect stdin and/or output if necessary
+			if (input_fd != STDIN_FILENO) {
+				dup2(input_fd, STDIN_FILENO);
 				close(input_fd);
-				return -1;
 			}
-			break;
-		default:
-			break;
-	}
+			if (output_fd != STDOUT_FILENO) {
+				dup2(output_fd, STDOUT_FILENO);
+				close(output_fd);
+			}
 
-	pid = fork();
+			// Close unused read end of the current pipe
+			if (current_cmd->output_type == COMMAND_OUTPUT_PIPE) {
+				close(curr_pipe[0]);
+				close(curr_pipe[1]); // closing write end as well to try to fix hanging? 
+			}
 
-	if (pid == 0) {
+			execvp(current_cmd->argv[0], current_cmd->argv);
 
-		// redirect stdin and/or output if necessary
-		if (input_fd != STDIN_FILENO) {
-			dup2(input_fd, STDIN_FILENO);
-			close(input_fd);
-		}
-		if (output_fd != STDOUT_FILENO) {
-			dup2(output_fd, STDOUT_FILENO);
-			close(output_fd);
-		}
+			// Check why execvp failed
+			if (errno == ENOENT) {
+				fprintf(stderr, "error: cannot find command\n");
+			} else {
+				perror("Failed to execute the external command");
+			}
 
-		// Child process
-		execvp(pipeline->argv[0], pipeline->argv);
+			exit(-1);
+		} else if (pid > 0) {
+			// Parent process
 
-		// Check why execvp failed
-		if (errno == ENOENT) {
-			fprintf(stderr, "error: cannot find command\n");
+			// Close prev pipe if any
+			if (prev_pipe[0] != -1) {
+				close(prev_pipe[0]);
+				close(prev_pipe[1]);
+			}
+
+			// close write end in parent if current command output is a pipe
+			if (current_cmd->output_type == COMMAND_OUTPUT_PIPE) {
+				close(curr_pipe[1]);
+			}
+
+			// Set the input FD to the read end of curr pipe
+			input_fd = (current_cmd->output_type == COMMAND_OUTPUT_PIPE) ? curr_pipe[0] : STDIN_FILENO;
+
+			// Copy current pipe to prev pipe for next iteration
+			prev_pipe[0] = curr_pipe[0];
+			prev_pipe[1] = curr_pipe[1];
+
+			// Go to next command
+			current_cmd = current_cmd->pipe_to;
 		} else {
-			perror("Failed to execute the external command");
-		}
-
-		exit(-1);
-	} else if (pid > 0) {
-		// Parent process
-
-		// Clock file descriptors in parent
-		if (input_fd != STDIN_FILENO) close(input_fd);
-		if (output_fd != STDOUT_FILENO) close(output_fd);
-
-		waitpid(pid, &status, 0);
-
-		// Check if child terminated normally
-		if (WIFEXITED(status)) {
-			return WEXITSTATUS(status);
-		} else {
+			perror("fork failed");
 			return -1;
 		}
-	} else {
-		perror("fork failed");
-		return -1;
+		
 	}
 
-	return -1;
+	// Wait for all child processes to complete
+	while(wait(&status) > 0);
+
+	return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
 }
 
 /**
