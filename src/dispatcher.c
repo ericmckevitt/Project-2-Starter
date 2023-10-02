@@ -103,34 +103,26 @@ static int dispatch_external_command(struct command *pipeline)
 				close(output_fd);
 			}
 
-			// Close unused read end of the current pipe
+			// Close unused write end of the current pipe
 			if (current_cmd->output_type == COMMAND_OUTPUT_PIPE) {
-				close(curr_pipe[0]);
-				close(curr_pipe[1]); // closing write end as well to try to fix hanging? 
+				close(curr_pipe[1]); 
 			}
 
 			execvp(current_cmd->argv[0], current_cmd->argv);
 
-			// Check why execvp failed
-			if (errno == ENOENT) {
-				fprintf(stderr, "error: cannot find command\n");
-			} else {
-				perror("Failed to execute the external command");
-			}
-
+			perror("execvp failed");
 			exit(-1);
 		} else if (pid > 0) {
 			// Parent process
 
-			// Close prev pipe if any
-			if (prev_pipe[0] != -1) {
-				close(prev_pipe[0]);
-				close(prev_pipe[1]);
-			}
-
 			// close write end in parent if current command output is a pipe
 			if (current_cmd->output_type == COMMAND_OUTPUT_PIPE) {
 				close(curr_pipe[1]);
+			}
+
+			// Close read end of previous pipe
+			if (prev_pipe[0] != -1) {
+				close(prev_pipe[0]);
 			}
 
 			// Set the input FD to the read end of curr pipe
