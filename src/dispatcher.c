@@ -81,6 +81,16 @@ static int dispatch_external_command(struct command *pipeline)
 		} else if (current_cmd->output_type == COMMAND_OUTPUT_FILE_APPEND) {
 			output_fd = open(pipeline->output_filename, O_WRONLY | O_CREAT | O_APPEND, 0644);
 		}
+		
+		// Check for input redirection
+		if (current_cmd->input_filename) {
+			input_fd = open(current_cmd->input_filename, O_RDONLY);
+			if (input_fd == -1) {
+				perror("Failed to open input file for reading");
+				return -1;
+			}
+		}
+
 
 		// Handle errors with file opening
 		if ((current_cmd->output_type == COMMAND_OUTPUT_FILE_TRUNCATE || current_cmd->output_type == COMMAND_OUTPUT_FILE_APPEND) && output_fd == -1) {
