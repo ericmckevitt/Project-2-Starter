@@ -12,6 +12,84 @@
 #include "shell_builtins.h"
 #include "parser.h"
 
+int setup_io(struct command *current_cmd, int *input_fd, int *output_fd, int *curr_pipe);
+
+void execute_child_process(struct command *current_cmd, int input_fd, int output_fd, int *curr_pipe);
+
+void handle_parent_process(struct command *current_cmd, int *input_fd, int *prev_pipe, int *curr_pipe);
+
+int setup_io(struct command *current_cmd, int *input_fd, int *output_fd, int *curr_pipe) {
+	if (current_cmd->output_type == COMMAND_OUTPUT_PIPE) {
+		if (pipe(curr_pipe) == -1) {
+			perror("pipe failed");
+			return -1;
+		}
+		*output_fd = curr_pipe[1];
+	} else if (current_cmd->output_type == COMMAND_OUTPUT_FILE_TRUNCATE) {
+		*output_fd = open(current_cmd->output_filename, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+	} else if (current_cmd->output_type == COMMAND_OUTPUT_FILE_APPEND) {
+		*output_fd = open(current_cmd->output_filename, O_WRONLY | O_CREAT | O_APPEND, 0644);
+	}
+		
+	// Check for input redirection < 
+	if (current_cmd->input_filename) {
+		*input_fd = open(current_cmd->input_filename, O_RDONLY);
+		if (*input_fd == -1) {
+			perror("Failed to open input file for reading");
+			return -1;
+		}
+	}
+
+	if ((*output_fd == -1) && (current_cmd->output_type == COMMAND_OUTPUT_FILE_TRUNCATE || current_cmd->output_type == COMMAND_OUTPUT_FILE_APPEND)) {
+		perror("Failed to open output file");
+		return -1;
+	}
+
+	// success
+	return 0; 
+}
+
+void execute_child_process(struct command *current_cmd, int input_fd, int output_fd, int *curr_pipe) {
+	// redirect stdin and/or output if necessary
+	if (input_fd != STDIN_FILENO) {
+		dup2(input_fd, STDIN_FILENO);
+		close(input_fd);
+	}
+	if (output_fd != STDOUT_FILENO) {
+		dup2(output_fd, STDOUT_FILENO);
+		close(output_fd);
+	}
+
+	// Close unused write end of the current pipe
+	if (current_cmd->output_type == COMMAND_OUTPUT_PIPE) {
+		close(curr_pipe[1]); 
+	}
+
+	execvp(current_cmd->argv[0], current_cmd->argv);
+
+	perror("execvp failed");
+	exit(-1);
+}
+
+void handle_parent_process(struct command *current_cmd, int *input_fd, int *prev_pipe, int *curr_pipe) {
+	// close write end in parent if current command output is a pipe
+	if (current_cmd->output_type == COMMAND_OUTPUT_PIPE) {
+		close(curr_pipe[1]);
+	}
+
+	// Close read end of previous pipe
+	if (prev_pipe[0] != -1) {
+		close(prev_pipe[0]);
+	}
+
+	// Set the input FD to the read end of curr pipe
+	*input_fd = (current_cmd->output_type == COMMAND_OUTPUT_PIPE) ? curr_pipe[0] : STDIN_FILENO;
+
+	// Copy current pipe to prev pipe for next iteration
+	prev_pipe[0] = curr_pipe[0];
+	prev_pipe[1] = curr_pipe[1];
+}
+
 /**
  * dispatch_external_command() - run a pipeline of commands
  *
@@ -69,85 +147,23 @@ static int dispatch_external_command(struct command *pipeline)
 	struct command *current_cmd = pipeline;
 
 	while (current_cmd) {
-		// Create a pipe if output of current_cmd is piped to another command
-		if (current_cmd->output_type == COMMAND_OUTPUT_PIPE) {
-			if (pipe(curr_pipe) == -1) {
-				perror("pipe failed");
-				return -1;
-			}
-			output_fd = curr_pipe[1];
-		} else if (current_cmd->output_type == COMMAND_OUTPUT_FILE_TRUNCATE) {
-			output_fd = open(current_cmd->output_filename, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-		} else if (current_cmd->output_type == COMMAND_OUTPUT_FILE_APPEND) {
-			output_fd = open(current_cmd->output_filename, O_WRONLY | O_CREAT | O_APPEND, 0644);
-		}
-		
-		// Check for input redirection < 
-		if (current_cmd->input_filename) {
-			input_fd = open(current_cmd->input_filename, O_RDONLY);
-			if (input_fd == -1) {
-				perror("Failed to open input file for reading");
-				return -1;
-			}
-		}
-
-		// Handle errors with file opening
-		if ((current_cmd->output_type == COMMAND_OUTPUT_FILE_TRUNCATE || current_cmd->output_type == COMMAND_OUTPUT_FILE_APPEND) && output_fd == -1) {
-			perror("Failed to open output file");
-			return -1; 
+		if (setup_io(current_cmd, &input_fd, &output_fd, curr_pipe) == -1) {
+			return -1;
 		}
 
 		pid = fork();
 
 		if (pid == 0) {
 			// Child process
-
-			// redirect stdin and/or output if necessary
-			if (input_fd != STDIN_FILENO) {
-				dup2(input_fd, STDIN_FILENO);
-				close(input_fd);
-			}
-			if (output_fd != STDOUT_FILENO) {
-				dup2(output_fd, STDOUT_FILENO);
-				close(output_fd);
-			}
-
-			// Close unused write end of the current pipe
-			if (current_cmd->output_type == COMMAND_OUTPUT_PIPE) {
-				close(curr_pipe[1]); 
-			}
-
-			execvp(current_cmd->argv[0], current_cmd->argv);
-
-			perror("execvp failed");
-			exit(-1);
+			execute_child_process(current_cmd, input_fd, output_fd, curr_pipe);
 		} else if (pid > 0) {
 			// Parent process
-
-			// close write end in parent if current command output is a pipe
-			if (current_cmd->output_type == COMMAND_OUTPUT_PIPE) {
-				close(curr_pipe[1]);
-			}
-
-			// Close read end of previous pipe
-			if (prev_pipe[0] != -1) {
-				close(prev_pipe[0]);
-			}
-
-			// Set the input FD to the read end of curr pipe
-			input_fd = (current_cmd->output_type == COMMAND_OUTPUT_PIPE) ? curr_pipe[0] : STDIN_FILENO;
-
-			// Copy current pipe to prev pipe for next iteration
-			prev_pipe[0] = curr_pipe[0];
-			prev_pipe[1] = curr_pipe[1];
-
-			// Go to next command
-			current_cmd = current_cmd->pipe_to;
+			handle_parent_process(current_cmd, &input_fd, prev_pipe, curr_pipe);
+			current_cmd = current_cmd->pipe_to; // move to next command
 		} else {
 			perror("fork failed");
 			return -1;
 		}
-		
 	}
 
 	// Wait for all child processes to complete
